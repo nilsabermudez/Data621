@@ -1,0 +1,183 @@
+---
+title: "Data621Hw5"
+author: "Nilsa Bermudez"
+date: "05/02/2022"
+output: html_document
+---
+
+```{r, message=FALSE, warning=FALSE}
+library(tidyverse)
+library(tidymodels)
+library(Metrics)
+library(ggstatsplot)
+library(pscl)
+library(DataExplorer)
+library(caret)
+library(MASS)
+
+train<-read.csv("https://raw.githubusercontent.com/nilsabermudez/Data621/main/wine-training-data.csv")
+test<-read.csv("https://raw.githubusercontent.com/nilsabermudez/Data621/main/wine-evaluation-data.csv")
+```
+
+**1**
+First of all, we will look at the amount of NAs, for our data we see that NAs are present in columns pH, ResidualSugar, Chlorides, FreeSulfurDioxide, Alcohol, TotalSulfurDioxide, Sulphates, STARS, so we will need to do something with it - imputing for example.
+```{r}
+plot_missing(train)
+plot_missing(test)
+```
+Next, we will take a look at the histogram plot for our target variable. We see that a lot of observations have near-zero variables and then something close to normal distribution for all other variables.
+```{r}
+ggplot(train, aes(x=TARGET))+geom_histogram()+theme_ggstatsplot()
+```
+Now we will make a boxplot for our stars and visual appearance groups - the amount of purchase for all of them. We see a clear difference between stars, and visual appearance groups, also we see some outliers which can be an issue in our next model building.
+```{r}
+ggplot(train, aes(x=factor(STARS), y=TARGET))+geom_boxplot(aes(color=factor(STARS)))+scale_color_brewer(palette = "Dark2", aesthetics = "color")+facet_wrap(~LabelAppeal)+xlab("Stars")+ylab("Purchase(Target)")+labs(title = "Boxplots of wine salse for stars gropus and visual appearence groups")
+
+```
+Lastly, we will create a correlation matrix for all of our variables, we see a clear positive correlation for our target variables with Stars and Appeal, next we will see a weak but significant correlation with variables - alcohol, total sulfur dioxide, and free sulfur dioxide. Then we see strong negative correlation with acid index, and weak negative correlation with Sulphates, Density, chlorides, volatile acidity, and fixed acidity
+```{r, fig.height=8, fig.width=8}
+  ggcorrmat(train)
+```
+**2**
+
+We will apply three different data transformation methods for our models - for the first one, we will impute missing data with median, and no other preprocessing, the next one will impute missing data with median, and then we will apply Yeo Johnson transformation. The last one will use a simple linear regression model to impute our variables(for it we will use only complete variables), and then we will apply the Yeo-Johnson transformation.
+```{r}
+dmodel_null<-recipe(TARGET~., data=train)%>%
+  step_impute_median(all_predictors())%>%
+  prep()%>%
+  bake(train)
+
+
+
+
+
+dmodel_Yeo_johnson<-recipe(TARGET~., data=train)%>%
+  step_impute_median(all_predictors())%>%
+  step_YeoJohnson(all_predictors())%>%
+  prep()%>%
+  bake(train)
+
+dmodel_imputed_linear<-recipe(TARGET~., data=train)%>%
+  step_impute_linear(pH, ResidualSugar, Chlorides, FreeSulfurDioxide, Alcohol, TotalSulfurDioxide, Sulphates, STARS, impute_with = imp_vars(all_predictors(), -pH, -ResidualSugar, -Chlorides, -FreeSulfurDioxide, -Alcohol, -TotalSulfurDioxide, -Sulphates, -STARS))%>%
+  step_YeoJohnson(all_predictors())%>%
+  prep()%>%
+  bake(train)
+
+```
+
+**3-4**
+The first model is a simple multiple linear regression model with data imputed with median, and all variables as predictors.
+
+For metrics of our model we will use Akaike Information Criteria(AIC) score, Root Mean Square Error(rmse), Mean Absolute Percentage Error(mape).
+We see  AIC for this model is 48777, and the root mean square error for predictions on the train set is 1.625494, mape for this model is - 0.5075194.
+```{r}
+multiple_linear1<-glm(TARGET~., data=dmodel_null)
+
+summary(multiple_linear1)
+
+rmse(predict(multiple_linear1, dmodel_null), train$TARGET)
+mape(predict(multiple_linear1, dmodel_null), train$TARGET)
+```
+The second model is a simple multiple linear regression model with data imputed with median, and Yeo-Johnson transformation and all variables as predictors.
+We see  AIC for this model is 48957, and the root mean square error for predictions on the train set is 1.637008, mape-0.4990196. What looks a little worse than previous one.
+```{r}
+multiple_linear2<-glm(TARGET~., data=dmodel_Yeo_johnson)
+
+summary(multiple_linear2)
+
+rmse(predict(multiple_linear2, dmodel_Yeo_johnson), train$TARGET)
+mape(predict(multiple_linear2, dmodel_Yeo_johnson), train$TARGET)
+```
+
+The third one model is a  multiple linear regression model with data imputed with linear model, and Yeo-Johnson transformation and all variables as predictors.
+We see  AIC for this model is 48957, and the root mean square error for predictions on the train set is 1.636994 and mape is 0.5016712. What looks a little worse than previous two models.
+```{r}
+multiple_linear3<-glm(TARGET~., data=dmodel_imputed_linear)
+
+summary(multiple_linear3)
+
+rmse(predict(multiple_linear3, dmodel_imputed_linear), train$TARGET)
+mape(predict(multiple_linear3, dmodel_imputed_linear), train$TARGET)
+```
+Lastly, for our multiple linear models, we will apply stepwise aic selection to choose the most important predictors. We see that the most important variables are STARS, AcidIndex, LabelAppeal, Alcohol, Sulphates, pH, Density, TotalSulfurDioxide, FreeSulfurDioxide, Chlorides, CitricAcid, VolatileAcidity, FixedAcidity. We see AIC for this model - 48954, and rmse for this one - 1.637074, mape for this one is - 0.4996344. What is a little better than the previous one. 
+```{r}
+multiple_linear4<-stepAIC(multiple_linear3)
+summary(multiple_linear4)
+
+rmse(predict(multiple_linear4, dmodel_imputed_linear), train$TARGET)
+mape(predict(multiple_linear4, dmodel_imputed_linear), train$TARGET)
+```
+
+Now to our *count regression models* we will use two type of them - first one *poisson regression model*, which will predict rare events which follows poisson distribution, and second one will be count *zero-inflated regression model*.
+Poisson regression model predictors for this model will be STARS, AcidIndex, LabelAppeal, Alcohol, Sulphates, pH, Density, TotalSulfurDioxide, FreeSulfurDioxide, Chlorides, CitricAcid, VolatileAcidity, FixedAcidity, and missing data will be imputed with a median. We see AIC for this model - 50390, and rmse for this one - 2.653858, mape for first poisson model is 2.453169.
+```{r}
+poison_1<-glm(TARGET~STARS+AcidIndex+LabelAppeal+Alcohol+Sulphates+pH+Density+TotalSulfurDioxide+FreeSulfurDioxide+Chlorides+CitricAcid+VolatileAcidity+FixedAcidity, data=dmodel_null, family = poisson)
+
+summary(poison_1)
+
+rmse(predict(poison_1, dmodel_null), train$TARGET)
+mape(predict(poison_1, dmodel_null), train$TARGET)
+```
+Our next Poisson regression model will have similar predictors as the previous one, data will be impured with median, and yeo-Johnson transformation will be applied.  AIC for this model is - 50621, and rmse is -2.65691, and mape -2.289669.
+```{r}
+poison_2<-glm(TARGET~STARS+AcidIndex+LabelAppeal+Alcohol+Sulphates+pH+Density+TotalSulfurDioxide+FreeSulfurDioxide+Chlorides+CitricAcid+VolatileAcidity+FixedAcidity, data=dmodel_Yeo_johnson, family = poisson)
+
+summary(poison_2)
+
+rmse(predict(poison_2, dmodel_Yeo_johnson), train$TARGET)
+mape(predict(poison_2, dmodel_Yeo_johnson), train$TARGET)
+```
+
+Our last poison regression model will use the same predictors and data will be imputed with simple linear models, with Yeo-Johnson transformations.AIC score for this model is - 50620, and rmse - 2.656907, mape- 2.287493. We see that all of our Poisson regression models are worse(based on all 3 metrics) than our multiple linear regression model.
+```{r}
+poison_3<-glm(TARGET~STARS+AcidIndex+LabelAppeal+Alcohol+Sulphates+pH+Density+TotalSulfurDioxide+FreeSulfurDioxide+Chlorides+CitricAcid+VolatileAcidity+FixedAcidity, data=dmodel_imputed_linear, family = poisson)
+
+summary(poison_3)
+
+rmse(predict(poison_3, dmodel_imputed_linear), train$TARGET)
+mape(predict(poison_3, dmodel_imputed_linear), train$TARGET)
+```
+ Now to second type of *count model - zeroinflated*- it will have all predictors which Poisson model has, and data imputed with median. AIC score is 45069.36, and rmse is 1.60997, mape for it is - 0.490771. For now, it looks like the best model. 
+```{r}
+zero_1<-zeroinfl(TARGET~STARS+AcidIndex+LabelAppeal+Alcohol+Sulphates+pH+Density+TotalSulfurDioxide+FreeSulfurDioxide+Chlorides+CitricAcid+VolatileAcidity+FixedAcidity, data=dmodel_null)
+
+summary(zero_1)
+AIC(zero_1)
+rmse(predict(zero_1, dmodel_null), train$TARGET)
+mape(predict(zero_1, dmodel_null), train$TARGET)
+```
+The next zeroinflated model is similar to the previous one but with Yeo-Johnson transformation. We see that AIC score for this model is - 45140.88, and rmse is - 1.612789, mape - 0.4828341. Looks like this model is a little worse than the previous one.
+```{r}
+zero_2<-zeroinfl(TARGET~STARS+AcidIndex+LabelAppeal+Alcohol+Sulphates+pH+Density+TotalSulfurDioxide+FreeSulfurDioxide+Chlorides+CitricAcid+VolatileAcidity+FixedAcidity, data=dmodel_Yeo_johnson)
+
+summary(zero_2)
+AIC(zero_2)
+rmse(predict(zero_2, dmodel_Yeo_johnson), train$TARGET)
+mape(predict(zero_2, dmodel_Yeo_johnson), train$TARGET)
+```
+
+	The last one zero-inflated model, will have the same predictors, and data will be imputed with a simple linear model, with Yeo-Johnson transformation. AIC score for this model is 45140.7, and rmse is 1.612778, mape - 0.481639.
+	
+	
+	So it looks like our first zero-inflated model without any data transformations and STARS, AcidIndex, LabelAppeal, Alcohol, Sulphates, pH, Density, TotalSulfurDioxide, FreeSulfurDioxide, Chlorides, CitricAcid, VolatileAcidity, FixedAcidity as predictors , and median imputation is the best for this task.
+```{r}
+zero_3<-zeroinfl(TARGET~STARS+AcidIndex+LabelAppeal+Alcohol+Sulphates+pH+Density+TotalSulfurDioxide+FreeSulfurDioxide+Chlorides+CitricAcid+VolatileAcidity+FixedAcidity, data=dmodel_imputed_linear)
+AIC(zero_3)
+summary(zero_3)
+
+rmse(predict(zero_3, dmodel_imputed_linear), train$TARGET)
+mape(predict(zero_3, dmodel_imputed_linear), train$TARGET)
+```
+
+**Summary**
+Now we make predictions with the first one count zero-inflated model.
+```{r}
+dmodel_null_test<-recipe(TARGET~., data=test)%>%
+  step_impute_median(all_predictors())%>%
+  prep()%>%
+  bake(test)
+
+preds<-as.data.frame(predict(zero_1, dmodel_null_test))
+head(preds)
+```
+
